@@ -1,125 +1,140 @@
 """
-Keg Scale Bottom Cover Generator
-Scale footprint: 210 x 210 mm  (from existing keg fill scale.stl)
+Keg Scale Bottom Cover Generator  (revised)
+============================================
+Scale body (existing STL): 210 x 210 x 15 mm
+  - 4 corner holes: ~18 mm dia, centers at approx (32,32),(178,32),(32,178),(178,178)
+  - Load cells mount INSIDE, fixed ends at top, free ends pointing DOWN
 
-Load cell specs (HX711 50kg parallel beam type):
-  Body: 34 x 34 mm
-  Height: ~10 mm
-  Mounting hole spacing: 28 mm center-to-center (2x M4)
+Bottom cover design:
+  - Flat plate: 210 x 210 x PLATE_H mm  (sits on the ground)
+  - 4 upward-pointing cylindrical feet at each corner
+      * pass up through the holes in the scale body bottom
+      * tips contact the load cell free ends
+  - Each foot has a slight dome top for self-centering on the load cell
+  - 4 small rubber-foot dimples on the underside for grip/traction
+  - Central wire-pass hole (optional)
 
-Design:
-  - Base plate: 210 x 210 x 6 mm
-  - 4 round cylindrical feet at corners (60 mm dia, 15 mm tall below plate)
-  - Each foot has a 35 x 35 x 12 mm rectangular load cell pocket accessible from below
-  - 2x M4 (4.5 mm) through-holes per pocket for load cell mounting screws
-  - 5 mm wire access hole per foot through the base plate
-  - Small chamfer/fillet on foot bases (approximated with tapered cylinder)
-
-Coordinate system: Z=0 is bottom of plate, Z=6 is top of plate,
-                   feet hang below (Z = -15 to Z = 0)
+Coordinate system:
+  Z = 0      = bottom of cover (ground contact)
+  Z = PLATE_H = top of cover plate (where scale body sits)
+  Feet extend from Z=0 up to Z = PLATE_H + FOOT_H
 """
 
 import trimesh
 import numpy as np
 
-# ── Design parameters ──────────────────────────────────────────────────────────
-SCALE_W       = 210.0   # mm, scale width  (X)
-SCALE_D       = 210.0   # mm, scale depth  (Y)
-PLATE_H       =   6.0   # mm, plate thickness
+# ── Parameters (adjust as needed) ────────────────────────────────────────────
+SCALE_W       = 210.0   # mm
+SCALE_D       = 210.0   # mm
+PLATE_H       =   5.0   # mm, cover plate thickness
 
-FOOT_R        =  30.0   # mm, foot radius  to 60 mm dia
-FOOT_H        =  15.0   # mm, foot height below plate
-FOOT_OFFSET   =  30.0   # mm, foot center distance from each edge corner
+# Upward feet (pass through scale body holes to contact load cells)
+FOOT_R        =   8.0   # mm radius = 16 mm dia  (scale body holes are ~18 mm dia)
+FOOT_H        =  10.0   # mm, foot height ABOVE cover plate top
+                        # Adjust so foot tip meets load cell free end inside housing
+DOME_H        =   1.0   # mm, dome height on foot tip for self-centering
 
-POCKET_W      =  35.5   # mm, load cell pocket width  (X) — 0.5 mm clearance
-POCKET_D      =  35.5   # mm, load cell pocket depth  (Y)
-POCKET_H      =  12.0   # mm, load cell pocket height (how deep)
-
-M4_HOLE_D     =   4.5   # mm, M4 clearance hole diameter
-HOLE_SPACING  =  28.0   # mm, center-to-center for mounting holes
-
-WIRE_HOLE_D   =   5.0   # mm, wire access hole diameter through plate
-SECTIONS      =  64     # polygon facets for cylinders
-
-# ── Foot center positions ──────────────────────────────────────────────────────
-foot_centers = [
-    (FOOT_OFFSET,           FOOT_OFFSET),
-    (SCALE_W - FOOT_OFFSET, FOOT_OFFSET),
-    (FOOT_OFFSET,           SCALE_D - FOOT_OFFSET),
-    (SCALE_W - FOOT_OFFSET, SCALE_D - FOOT_OFFSET),
+# Foot center positions (matched to scale body corner hole centers)
+FOOT_CENTERS = [
+    ( 32.0,  32.0),
+    (178.0,  32.0),
+    ( 32.0, 178.0),
+    (178.0, 178.0),
 ]
 
-# ── Helper: translate a mesh by (tx, ty, tz) ──────────────────────────────────
+# Small rubber-foot dimples on underside at corners (ground contact)
+RUBBER_R      =   8.0   # mm
+RUBBER_H      =   2.0   # mm, depth of rubber foot recess
+RUBBER_OFFSET =  15.0   # mm from corner edges
+
+# Sections for cylinder approximation
+SECTIONS = 64
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def translate(mesh, tx, ty, tz):
     mesh.apply_translation([tx, ty, tz])
     return mesh
 
-# ── Build geometry ─────────────────────────────────────────────────────────────
 
-# 1. Base plate  (0,0,0) to (210,210,6)
+def dome_cap(cx, cy, z_base, radius, dome_h, sections=SECTIONS):
+    """Approximate spherical dome as a fan of triangles on top of a cylinder."""
+    angles = np.linspace(0, 2 * np.pi, sections, endpoint=False)
+    rim = np.column_stack([
+        cx + radius * np.cos(angles),
+        cy + radius * np.sin(angles),
+        np.full(sections, z_base),
+    ])
+    tip = np.array([[cx, cy, z_base + dome_h]])
+    verts = np.vstack([rim, tip])
+
+    tip_idx = sections
+    faces = np.array([
+        [i, (i + 1) % sections, tip_idx]
+        for i in range(sections)
+    ], dtype=np.int32)
+    return trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+
+
+# ── Build geometry ────────────────────────────────────────────────────────────
+additive = []
+subtractive = []
+
+# 1. Base plate
 plate = trimesh.creation.box(extents=[SCALE_W, SCALE_D, PLATE_H])
 plate = translate(plate, SCALE_W / 2, SCALE_D / 2, PLATE_H / 2)
+additive.append(plate)
 
-additive_parts = [plate]
-subtractive_parts = []
+for (fx, fy) in FOOT_CENTERS:
 
-for (fx, fy) in foot_centers:
+    # 2. Upward cylindrical foot  (Z = 0 to PLATE_H + FOOT_H)
+    total_cyl_h = PLATE_H + FOOT_H
+    foot = trimesh.creation.cylinder(radius=FOOT_R, height=total_cyl_h, sections=SECTIONS)
+    foot = translate(foot, fx, fy, total_cyl_h / 2)
+    additive.append(foot)
 
-    # ── Cylindrical foot (hangs below plate) ──────────────────────────────
-    # trimesh.creation.cylinder centers at origin along Z
-    # We want it from Z = -FOOT_H to Z = 0  to center at Z = -FOOT_H/2
-    foot = trimesh.creation.cylinder(
-        radius=FOOT_R, height=FOOT_H, sections=SECTIONS)
-    foot = translate(foot, fx, fy, -FOOT_H / 2)
-    additive_parts.append(foot)
+    # 3. Dome on foot tip
+    dome = dome_cap(fx, fy, PLATE_H + FOOT_H, FOOT_R, DOME_H)
+    additive.append(dome)
 
-    # ── Rectangular load cell pocket (cut from bottom of foot) ────────────
-    # Goes from Z = -FOOT_H  up to Z = -(FOOT_H - POCKET_H)
-    # center Z = -FOOT_H + POCKET_H/2
-    pocket = trimesh.creation.box(extents=[POCKET_W, POCKET_D, POCKET_H + 0.1])
-    pocket = translate(pocket, fx, fy, -FOOT_H + POCKET_H / 2)
-    subtractive_parts.append(pocket)
+# 4. Rubber foot recesses on underside (small cylindrical pockets)
+rubber_positions = [
+    (RUBBER_OFFSET,           RUBBER_OFFSET),
+    (SCALE_W - RUBBER_OFFSET, RUBBER_OFFSET),
+    (RUBBER_OFFSET,           SCALE_D - RUBBER_OFFSET),
+    (SCALE_W - RUBBER_OFFSET, SCALE_D - RUBBER_OFFSET),
+]
+for (rx, ry) in rubber_positions:
+    recess = trimesh.creation.cylinder(radius=RUBBER_R, height=RUBBER_H + 0.1, sections=32)
+    recess = translate(recess, rx, ry, RUBBER_H / 2)   # sits at bottom of plate
+    subtractive.append(recess)
 
-    # ── M4 through-holes (go through pocket floor + plate) ────────────────
-    # Full height = FOOT_H + PLATE_H + 2 mm clearance (extra for clean booleans)
-    hole_total_h = FOOT_H + PLATE_H + 2.0
-    # Center Z = (-FOOT_H + PLATE_H) / 2  = (-15 + 6)/2 = -4.5
-    hole_cz = (-FOOT_H + PLATE_H) / 2
+# ── Boolean ops ───────────────────────────────────────────────────────────────
+print("Unioning main body ...")
+# Filter to watertight meshes only for union
+watertight = [m for m in additive if m.is_watertight]
+non_watertight = [m for m in additive if not m.is_watertight]
 
-    for dx in [-HOLE_SPACING / 2, +HOLE_SPACING / 2]:
-        mhole = trimesh.creation.cylinder(
-            radius=M4_HOLE_D / 2, height=hole_total_h, sections=32)
-        mhole = translate(mhole, fx + dx, fy, hole_cz)
-        subtractive_parts.append(mhole)
+solid = trimesh.boolean.union(watertight, engine="manifold")
 
-    # ── Wire / cable access hole through plate only ───────────────────────
-    wire_hole = trimesh.creation.cylinder(
-        radius=WIRE_HOLE_D / 2, height=PLATE_H + 2.0, sections=32)
-    wire_hole = translate(wire_hole, fx, fy, PLATE_H / 2)
-    subtractive_parts.append(wire_hole)
+if subtractive:
+    print("Subtracting recesses ...")
+    cuts = trimesh.boolean.union(subtractive, engine="manifold")
+    result = trimesh.boolean.difference([solid, cuts], engine="manifold")
+else:
+    result = solid
 
-
-# ── Boolean operations ─────────────────────────────────────────────────────────
-print("Unioning base plate + feet …")
-solid = trimesh.boolean.union(additive_parts, engine="manifold")
-
-print("Subtracting pockets + holes …")
-cutouts = trimesh.boolean.union(subtractive_parts, engine="manifold")
-result = trimesh.boolean.difference([solid, cutouts], engine="manifold")
-
-# ── Validate & export ──────────────────────────────────────────────────────────
-try:
-    result.fix_normals()
-except Exception:
-    pass
+# ── Report ────────────────────────────────────────────────────────────────────
 print(f"\nMesh info:")
 print(f"  Watertight : {result.is_watertight}")
 print(f"  Triangles  : {len(result.faces)}")
 bb = result.bounds
-print(f"  Bounds X   : {bb[0][0]:.1f} to {bb[1][0]:.1f}  ({bb[1][0]-bb[0][0]:.1f} mm)")
-print(f"  Bounds Y   : {bb[0][1]:.1f} to {bb[1][1]:.1f}  ({bb[1][1]-bb[0][1]:.1f} mm)")
-print(f"  Bounds Z   : {bb[0][2]:.1f} to {bb[1][2]:.1f}  ({bb[1][2]-bb[0][2]:.1f} mm)")
+print(f"  X : {bb[0][0]:.1f} to {bb[1][0]:.1f}  ({bb[1][0]-bb[0][0]:.1f} mm)")
+print(f"  Y : {bb[0][1]:.1f} to {bb[1][1]:.1f}  ({bb[1][1]-bb[0][1]:.1f} mm)")
+print(f"  Z : {bb[0][2]:.1f} to {bb[1][2]:.1f}  ({bb[1][2]-bb[0][2]:.1f} mm)")
+print(f"\nFoot tip height above cover plate : {FOOT_H:.1f} mm")
+print(f"Foot diameter                      : {FOOT_R*2:.1f} mm")
+print(f"  (scale body holes are ~18 mm dia, feet are {FOOT_R*2:.1f} mm dia)")
 
-out_path = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
-result.export(out_path)
-print(f"\nSaved to {out_path}")
+out = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
+result.export(out)
+print(f"\nSaved to {out}")
