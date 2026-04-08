@@ -1,39 +1,38 @@
 """
 Keg Scale Bottom Cover Generator
 =================================
-Scale body (existing STL): 210 x 210 x 15 mm
-  - Rounded corners, radius = 32 mm (arc centers coincide with foot hole centers)
-  - 4 corner holes: ~18 mm dia, centers at (32,32),(178,32),(32,178),(178,178)
-  - Load cells mount INSIDE, fixed ends at top, free ends pointing DOWN
+Outputs two separate STL files:
 
-Bottom cover design:
-  - Rounded-rectangle plate matching the scale body footprint exactly (32 mm corner radius)
-  - 4 upward-pointing cylindrical feet at each corner
-      * pass up through the 18 mm holes in the scale body bottom
-      * dome tip contacts the load cell free end for self-centering
-  - 4 rubber-foot recesses on underside at corners for grip pads
+  1. keg_scale_bottom_cover.stl
+       Rounded-rectangle plate (32 mm corner radius, matches scale body)
+       210 x 210 x 5 mm with 4 x 16.5 mm holes for feet to pass through
+       Rubber-foot recesses on underside
 
-Coordinate system:
-  Z = 0       = bottom of cover (ground contact)
-  Z = PLATE_H = top of cover (where scale body rests)
-  Feet extend from Z=0 up to Z = PLATE_H + FOOT_H
+  2. keg_scale_feet.stl
+       4 cylindrical feet arranged in a 2x2 grid, ready to print flat
+       Each foot: 16 mm dia, 15 mm tall + 1 mm dome tip
+       Feet pass up through the cover plate holes and into the scale body
+       to contact the load cell free ends
+
+Scale body: 210 x 210 x 15 mm, corner holes at (32,32),(178,32),(32,178),(178,178)
 """
 
 import trimesh
 import numpy as np
 from shapely.geometry import Point
 from shapely.ops import unary_union
-import trimesh.creation
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-SCALE_W       = 210.0   # mm
-SCALE_D       = 210.0   # mm
-CORNER_R      =  32.0   # mm, matches scale body corner radius
-PLATE_H       =   5.0   # mm, cover plate thickness
+SCALE_W       = 210.0
+SCALE_D       = 210.0
+CORNER_R      =  32.0   # matches scale body
 
-FOOT_R        =   8.0   # mm radius = 16 mm dia (scale holes ~18 mm)
-FOOT_H        =  10.0   # mm, height above cover plate top
-DOME_H        =   1.0   # mm, dome on foot tip
+PLATE_H       =   5.0   # mm, cover plate thickness
+FOOT_HOLE_R   =   8.25  # mm, hole radius in plate (0.25 mm clearance on foot)
+
+FOOT_R        =   8.0   # mm radius = 16 mm dia
+FOOT_H        =  15.0   # mm tall (below cover + up into housing)
+DOME_H        =   1.0   # mm dome on tip
 
 FOOT_CENTERS = [
     ( 32.0,  32.0),
@@ -42,9 +41,9 @@ FOOT_CENTERS = [
     (178.0, 178.0),
 ]
 
-RUBBER_R      =   8.0   # mm, rubber foot recess radius
-RUBBER_H      =   2.0   # mm, recess depth
-RUBBER_OFFSET =  15.0   # mm inset from corner edges (before rounding)
+RUBBER_R      =   8.0
+RUBBER_H      =   2.0
+RUBBER_OFFSET =  15.0
 
 SECTIONS = 64
 
@@ -55,8 +54,6 @@ def translate(mesh, tx, ty, tz):
 
 
 def rounded_rect_extrusion(w, d, r, h, sections=SECTIONS):
-    """Create a solid rounded-rectangle extrusion using shapely + trimesh."""
-    # Build shapely polygon: 4 circles at corners + hull
     corners = [
         Point(r,     r    ),
         Point(w - r, r    ),
@@ -64,13 +61,10 @@ def rounded_rect_extrusion(w, d, r, h, sections=SECTIONS):
         Point(w - r, d - r),
     ]
     poly = unary_union([c.buffer(r, resolution=sections // 4) for c in corners]).convex_hull
-    # Extrude
-    mesh = trimesh.creation.extrude_polygon(poly, h)
-    return mesh
+    return trimesh.creation.extrude_polygon(poly, h)
 
 
 def dome_cap(cx, cy, z_base, radius, dome_h, sections=SECTIONS):
-    """Cone-shaped dome cap on top of a cylinder."""
     angles = np.linspace(0, 2 * np.pi, sections, endpoint=False)
     rim = np.column_stack([
         cx + radius * np.cos(angles),
@@ -83,57 +77,74 @@ def dome_cap(cx, cy, z_base, radius, dome_h, sections=SECTIONS):
     return trimesh.Trimesh(vertices=verts, faces=faces, process=False)
 
 
-# ── Build geometry ────────────────────────────────────────────────────────────
-additive    = []
-subtractive = []
+# ════════════════════════════════════════════════════════════════════════════════
+# FILE 1 — Bottom cover plate
+# ════════════════════════════════════════════════════════════════════════════════
+print("Building cover plate ...")
 
-# 1. Rounded-rectangle base plate
 plate = rounded_rect_extrusion(SCALE_W, SCALE_D, CORNER_R, PLATE_H, SECTIONS)
-additive.append(plate)
 
-# 2. Upward feet + dome caps
+# Holes for feet
+cuts = []
 for (fx, fy) in FOOT_CENTERS:
-    total_h = PLATE_H + FOOT_H
-    foot = trimesh.creation.cylinder(radius=FOOT_R, height=total_h, sections=SECTIONS)
-    foot = translate(foot, fx, fy, total_h / 2)
-    additive.append(foot)
+    hole = trimesh.creation.cylinder(radius=FOOT_HOLE_R, height=PLATE_H + 1.0, sections=SECTIONS)
+    hole = translate(hole, fx, fy, PLATE_H / 2)
+    cuts.append(hole)
 
-    dome = dome_cap(fx, fy, PLATE_H + FOOT_H, FOOT_R, DOME_H)
-    additive.append(dome)
-
-# 3. Rubber foot recesses (underside pockets near corners)
-rubber_positions = [
+# Rubber foot recesses (underside)
+for rx, ry in [
     (RUBBER_OFFSET,           RUBBER_OFFSET),
     (SCALE_W - RUBBER_OFFSET, RUBBER_OFFSET),
     (RUBBER_OFFSET,           SCALE_D - RUBBER_OFFSET),
     (SCALE_W - RUBBER_OFFSET, SCALE_D - RUBBER_OFFSET),
-]
-for (rx, ry) in rubber_positions:
+]:
     recess = trimesh.creation.cylinder(radius=RUBBER_R, height=RUBBER_H + 0.1, sections=32)
     recess = translate(recess, rx, ry, RUBBER_H / 2)
-    subtractive.append(recess)
+    cuts.append(recess)
 
-# ── Boolean ops ───────────────────────────────────────────────────────────────
-print("Unioning main body ...")
-watertight = [m for m in additive if m.is_watertight]
-solid = trimesh.boolean.union(watertight, engine="manifold")
+all_cuts = trimesh.boolean.union(cuts, engine="manifold")
+cover = trimesh.boolean.difference([plate, all_cuts], engine="manifold")
 
-print("Subtracting recesses ...")
-cuts = trimesh.boolean.union(subtractive, engine="manifold")
-result = trimesh.boolean.difference([solid, cuts], engine="manifold")
+print(f"  Watertight: {cover.is_watertight}  Triangles: {len(cover.faces)}")
+cover_path = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
+cover.export(cover_path)
+print(f"  Saved to {cover_path}")
 
-# ── Report ────────────────────────────────────────────────────────────────────
-print(f"\nMesh info:")
-print(f"  Watertight : {result.is_watertight}")
-print(f"  Triangles  : {len(result.faces)}")
-bb = result.bounds
-print(f"  X : {bb[0][0]:.1f} to {bb[1][0]:.1f}  ({bb[1][0]-bb[0][0]:.1f} mm)")
-print(f"  Y : {bb[0][1]:.1f} to {bb[1][1]:.1f}  ({bb[1][1]-bb[0][1]:.1f} mm)")
-print(f"  Z : {bb[0][2]:.1f} to {bb[1][2]:.1f}  ({bb[1][2]-bb[0][2]:.1f} mm)")
-print(f"\nCorner radius  : {CORNER_R:.0f} mm (matches scale body)")
-print(f"Foot diameter  : {FOOT_R*2:.0f} mm  (scale holes ~18 mm)")
-print(f"Foot protrusion: {FOOT_H:.0f} mm above plate top")
 
-out = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
-result.export(out)
-print(f"\nSaved to {out}")
+# ════════════════════════════════════════════════════════════════════════════════
+# FILE 2 — Feet (4 individual cylinders laid out for printing)
+# ════════════════════════════════════════════════════════════════════════════════
+print("\nBuilding feet ...")
+
+# Lay out 4 feet in a 2x2 grid with 5 mm spacing, all at Z=0 (print flat)
+# Each foot: cylinder + dome cap
+SPACING = FOOT_R * 2 + 5.0   # gap between feet when printing
+layout = [
+    (0,       0      ),
+    (SPACING, 0      ),
+    (0,       SPACING),
+    (SPACING, SPACING),
+]
+
+foot_parts = []
+for (lx, ly) in layout:
+    cx = lx + FOOT_R
+    cy = ly + FOOT_R
+    cyl = trimesh.creation.cylinder(radius=FOOT_R, height=FOOT_H, sections=SECTIONS)
+    cyl = translate(cyl, cx, cy, FOOT_H / 2)
+    foot_parts.append(cyl)
+
+    dome = dome_cap(cx, cy, FOOT_H, FOOT_R, DOME_H)
+    foot_parts.append(dome)
+
+watertight_feet = [m for m in foot_parts if m.is_watertight]
+feet = trimesh.boolean.union(watertight_feet, engine="manifold")
+
+print(f"  Watertight: {feet.is_watertight}  Triangles: {len(feet.faces)}")
+feet_path = "C:/Users/rig2/Downloads/keg_scale_feet.stl"
+feet.export(feet_path)
+print(f"  Saved to {feet_path}")
+
+print("\nDone.")
+print(f"  Cover: 210 x 210 x {PLATE_H:.0f} mm, 32 mm corner radius, {FOOT_HOLE_R*2:.1f} mm foot holes")
+print(f"  Feet:  {FOOT_R*2:.0f} mm dia x {FOOT_H:.0f} mm tall + {DOME_H:.0f} mm dome, 4 off")
