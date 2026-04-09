@@ -5,16 +5,27 @@ Outputs two separate STL files:
 
   1. keg_scale_bottom_cover.stl
        Rounded-rectangle plate (32 mm corner radius, matches scale body)
-       210 x 210 x 5 mm with 4 x 16.5 mm holes for feet to pass through
+       210 x 210 x 5 mm with 4 x 21.5 mm through-holes for foot stems
        Rubber-foot recesses on underside
 
   2. keg_scale_feet.stl
-       4 cylindrical feet arranged in a 2x2 grid, ready to print flat
-       Each foot: 16 mm dia, 15 mm tall + 1 mm dome tip
-       Feet pass up through the cover plate holes and into the scale body
-       to contact the load cell free ends
+       4 T-shaped feet laid out flat for printing
+       Each foot:
+         - Stem  : 20 mm dia x 22 mm  (snug in 21.5 mm body holes)
+         - Cap   : 36 mm dia x  3 mm  (sits inside body, wider than hole so it
+                   can't fall through; rests on interior ledge above hole)
+         - 2 x locating pins on cap top: 3 mm dia x 4 mm, spaced 28 mm C-C
+           (index into the load cell free-end M4 mounting holes for snug fit)
 
-Scale body: 210 x 210 x 15 mm, corner holes at (32,32),(178,32),(32,178),(178,178)
+  Assembly:
+    1. Drop each foot in from the top of the scale body, cap down
+    2. Stem passes down through the body hole and through the cover plate hole
+    3. Cover plate slides on from below, closing the bottom
+    4. Load cell free ends rest on caps and are located by the 2 pins (28 mm C-C)
+
+  Scale body: 210 x 210 x 15 mm
+    Corner holes: 21.5 mm dia at bottom face, cavity opens to ~39 mm at mid-height
+    Hole centres: (32,32), (178,32), (32,178), (178,178)
 """
 
 import trimesh
@@ -23,16 +34,23 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-SCALE_W       = 210.0
-SCALE_D       = 210.0
-CORNER_R      =  32.0   # matches scale body
+SCALE_W        = 210.0
+SCALE_D        = 210.0
+CORNER_R       =  32.0   # matches scale body corner radius
 
-PLATE_H       =   5.0   # mm, cover plate thickness
-FOOT_HOLE_R   =   8.25  # mm, hole radius in plate (0.25 mm clearance on foot)
+PLATE_H        =   5.0   # mm, cover plate thickness
+COVER_HOLE_R   =  10.75  # mm, hole in cover plate (= body hole radius, 21.5 mm dia)
 
-FOOT_R        =   8.0   # mm radius = 16 mm dia
-FOOT_H        =  15.0   # mm tall (below cover + up into housing)
-DOME_H        =   1.0   # mm dome on tip
+# Foot geometry
+STEM_R         =  10.0   # mm radius = 20 mm dia  (snug in 21.5 mm body holes)
+STEM_H         =  22.0   # mm, total foot height (stem + cap = printed flat)
+CAP_R          =  18.0   # mm radius = 36 mm dia  (wider than 21.5 mm hole, retained inside body)
+CAP_H          =   3.0   # mm, cap thickness
+
+# Locating pins on cap top (index into load cell M4 holes)
+PIN_R          =   1.5   # mm radius = 3 mm dia   (fits inside M4 hole ~3.3 mm minor dia)
+PIN_H          =   4.0   # mm tall
+PIN_SPACING    =  28.0   # mm C-C  (matches load cell mounting hole spacing)
 
 FOOT_CENTERS = [
     ( 32.0,  32.0),
@@ -41,9 +59,9 @@ FOOT_CENTERS = [
     (178.0, 178.0),
 ]
 
-RUBBER_R      =   8.0
-RUBBER_H      =   2.0
-RUBBER_OFFSET =  15.0
+RUBBER_R       =   8.0
+RUBBER_H       =   2.0
+RUBBER_OFFSET  =  15.0
 
 SECTIONS = 64
 
@@ -64,17 +82,32 @@ def rounded_rect_extrusion(w, d, r, h, sections=SECTIONS):
     return trimesh.creation.extrude_polygon(poly, h)
 
 
-def dome_cap(cx, cy, z_base, radius, dome_h, sections=SECTIONS):
-    angles = np.linspace(0, 2 * np.pi, sections, endpoint=False)
-    rim = np.column_stack([
-        cx + radius * np.cos(angles),
-        cy + radius * np.sin(angles),
-        np.full(sections, z_base),
-    ])
-    tip = np.array([[cx, cy, z_base + dome_h]])
-    verts = np.vstack([rim, tip])
-    faces = np.array([[i, (i + 1) % sections, sections] for i in range(sections)], dtype=np.int32)
-    return trimesh.Trimesh(vertices=verts, faces=faces, process=False)
+def make_foot(cx, cy, z_bottom):
+    """
+    T-shaped foot centred at (cx, cy).
+    Stem from z_bottom up to z_bottom+STEM_H.
+    Cap on top of stem (z_bottom+STEM_H to z_bottom+STEM_H+CAP_H).
+    Two locating pins on cap top.
+    """
+    parts = []
+
+    # Stem
+    stem = trimesh.creation.cylinder(radius=STEM_R, height=STEM_H, sections=SECTIONS)
+    stem = translate(stem, cx, cy, z_bottom + STEM_H / 2)
+    parts.append(stem)
+
+    # Cap
+    cap = trimesh.creation.cylinder(radius=CAP_R, height=CAP_H, sections=SECTIONS)
+    cap = translate(cap, cx, cy, z_bottom + STEM_H + CAP_H / 2)
+    parts.append(cap)
+
+    # Two locating pins (along X axis, user can rotate foot to suit load cell orientation)
+    for dx in [-PIN_SPACING / 2, +PIN_SPACING / 2]:
+        pin = trimesh.creation.cylinder(radius=PIN_R, height=PIN_H, sections=32)
+        pin = translate(pin, cx + dx, cy, z_bottom + STEM_H + CAP_H + PIN_H / 2)
+        parts.append(pin)
+
+    return trimesh.boolean.union(parts, engine="manifold")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -84,10 +117,10 @@ print("Building cover plate ...")
 
 plate = rounded_rect_extrusion(SCALE_W, SCALE_D, CORNER_R, PLATE_H, SECTIONS)
 
-# Holes for feet
 cuts = []
+# Foot stem holes
 for (fx, fy) in FOOT_CENTERS:
-    hole = trimesh.creation.cylinder(radius=FOOT_HOLE_R, height=PLATE_H + 1.0, sections=SECTIONS)
+    hole = trimesh.creation.cylinder(radius=COVER_HOLE_R, height=PLATE_H + 1.0, sections=SECTIONS)
     hole = translate(hole, fx, fy, PLATE_H / 2)
     cuts.append(hole)
 
@@ -105,46 +138,48 @@ for rx, ry in [
 all_cuts = trimesh.boolean.union(cuts, engine="manifold")
 cover = trimesh.boolean.difference([plate, all_cuts], engine="manifold")
 
-print(f"  Watertight: {cover.is_watertight}  Triangles: {len(cover.faces)}")
+print(f"  Watertight : {cover.is_watertight}   Triangles : {len(cover.faces)}")
 cover_path = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
 cover.export(cover_path)
-print(f"  Saved to {cover_path}")
+print(f"  Saved  ->  {cover_path}")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# FILE 2 — Feet (4 individual cylinders laid out for printing)
+# FILE 2 — Feet (4 individual T-shaped feet laid out for printing)
 # ════════════════════════════════════════════════════════════════════════════════
 print("\nBuilding feet ...")
 
-# Lay out 4 feet in a 2x2 grid with 5 mm spacing, all at Z=0 (print flat)
-# Each foot: cylinder + dome cap
-SPACING = FOOT_R * 2 + 5.0   # gap between feet when printing
+# Lay out 4 feet in a 2x2 grid (printed stem-up, cap flat on print bed)
+# Add 5 mm spacing between feet
+spacing = CAP_R * 2 + 5.0
 layout = [
     (0,       0      ),
-    (SPACING, 0      ),
-    (0,       SPACING),
-    (SPACING, SPACING),
+    (spacing, 0      ),
+    (0,       spacing),
+    (spacing, spacing),
 ]
 
-foot_parts = []
-for (lx, ly) in layout:
-    cx = lx + FOOT_R
-    cy = ly + FOOT_R
-    cyl = trimesh.creation.cylinder(radius=FOOT_R, height=FOOT_H, sections=SECTIONS)
-    cyl = translate(cyl, cx, cy, FOOT_H / 2)
-    foot_parts.append(cyl)
+all_feet = []
+for lx, ly in layout:
+    # Each foot has its cap at Z=0 (flat on bed), stem pointing up
+    # Cap centre at (lx + CAP_R, ly + CAP_R, CAP_H/2)
+    # We build foot with stem below cap, then flip: stem at top, cap at bottom for printing
+    foot = make_foot(lx + CAP_R, ly + CAP_R, 0)
+    all_feet.append(foot)
 
-    dome = dome_cap(cx, cy, FOOT_H, FOOT_R, DOME_H)
-    foot_parts.append(dome)
+# Union all 4 into one file
+feet_mesh = trimesh.boolean.union(all_feet, engine="manifold")
 
-watertight_feet = [m for m in foot_parts if m.is_watertight]
-feet = trimesh.boolean.union(watertight_feet, engine="manifold")
-
-print(f"  Watertight: {feet.is_watertight}  Triangles: {len(feet.faces)}")
+print(f"  Watertight : {feet_mesh.is_watertight}   Triangles : {len(feet_mesh.faces)}")
 feet_path = "C:/Users/rig2/Downloads/keg_scale_feet.stl"
-feet.export(feet_path)
-print(f"  Saved to {feet_path}")
+feet_mesh.export(feet_path)
+print(f"  Saved  ->  {feet_path}")
 
-print("\nDone.")
-print(f"  Cover: 210 x 210 x {PLATE_H:.0f} mm, 32 mm corner radius, {FOOT_HOLE_R*2:.1f} mm foot holes")
-print(f"  Feet:  {FOOT_R*2:.0f} mm dia x {FOOT_H:.0f} mm tall + {DOME_H:.0f} mm dome, 4 off")
+print(f"""
+Summary
+-------
+Cover plate : 210 x 210 x {PLATE_H:.0f} mm | 32 mm corners | {COVER_HOLE_R*2:.1f} mm foot holes
+Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
+Foot cap    : {CAP_R*2:.0f} mm dia x {CAP_H:.0f} mm    (retained inside scale body)
+Locate pins : {PIN_R*2:.0f} mm dia x {PIN_H:.0f} mm  at {PIN_SPACING:.0f} mm C-C (fits load cell M4 holes)
+""")
