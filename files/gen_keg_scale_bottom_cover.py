@@ -4,9 +4,13 @@ Keg Scale Bottom Cover Generator
 Outputs two separate STL files:
 
   1. keg_scale_bottom_cover.stl
-       Rounded-rectangle plate (32 mm corner radius, matches scale body)
+       Rounded-rectangle base plate (32 mm corner radius, matches scale body)
        210 x 210 x 5 mm with 4 x 21.5 mm through-holes for foot stems
        Rubber-foot recesses on underside
+       Side wall 3 mm thick x 8.25 mm tall around inside perimeter:
+         - 5.25 mm for load cells hanging down from scale body
+         - 3.00 mm for foot cap clearance
+         = 8.25 mm total cavity height
 
   2. keg_scale_feet.stl
        4 T-shaped feet laid out flat for printing
@@ -39,6 +43,9 @@ SCALE_D        = 210.0
 CORNER_R       =  32.0   # matches scale body corner radius
 
 PLATE_H        =   5.0   # mm, cover plate thickness
+WALL_T         =   3.0   # mm, side wall thickness
+WALL_H         =   8.25  # mm, side wall height above plate top
+                         #   = 5.25 mm load cell hang-down + 3.00 mm cap clearance
 COVER_HOLE_R   =  10.75  # mm, hole in cover plate (= body hole radius, 21.5 mm dia)
 
 # Foot geometry
@@ -115,10 +122,21 @@ def make_foot(cx, cy, z_bottom):
 # ════════════════════════════════════════════════════════════════════════════════
 print("Building cover plate ...")
 
-plate = rounded_rect_extrusion(SCALE_W, SCALE_D, CORNER_R, PLATE_H, SECTIONS)
+# Full solid: base plate height + side wall height
+total_h = PLATE_H + WALL_H
+solid = rounded_rect_extrusion(SCALE_W, SCALE_D, CORNER_R, total_h, SECTIONS)
 
-cuts = []
-# Foot stem holes
+# Inner cavity to hollow out the wall (leaves WALL_T thick perimeter)
+# Inner rect is WALL_T inset on each side; corner radius shrinks by WALL_T
+inner_w = SCALE_W - 2 * WALL_T
+inner_d = SCALE_D - 2 * WALL_T
+inner_r = CORNER_R - WALL_T          # concentric with outer corners
+inner_cavity = rounded_rect_extrusion(inner_w, inner_d, inner_r, WALL_H + 0.1, SECTIONS)
+inner_cavity = translate(inner_cavity, WALL_T, WALL_T, PLATE_H)   # sits on top of base plate
+
+cuts = [inner_cavity]
+
+# Foot stem holes (through base plate only)
 for (fx, fy) in FOOT_CENTERS:
     hole = trimesh.creation.cylinder(radius=COVER_HOLE_R, height=PLATE_H + 1.0, sections=SECTIONS)
     hole = translate(hole, fx, fy, PLATE_H / 2)
@@ -136,7 +154,7 @@ for rx, ry in [
     cuts.append(recess)
 
 all_cuts = trimesh.boolean.union(cuts, engine="manifold")
-cover = trimesh.boolean.difference([plate, all_cuts], engine="manifold")
+cover = trimesh.boolean.difference([solid, all_cuts], engine="manifold")
 
 print(f"  Watertight : {cover.is_watertight}   Triangles : {len(cover.faces)}")
 cover_path = "C:/Users/rig2/Downloads/keg_scale_bottom_cover.stl"
@@ -178,7 +196,8 @@ print(f"  Saved  ->  {feet_path}")
 print(f"""
 Summary
 -------
-Cover plate : 210 x 210 x {PLATE_H:.0f} mm | 32 mm corners | {COVER_HOLE_R*2:.1f} mm foot holes
+Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm corners | {COVER_HOLE_R*2:.1f} mm foot holes
+Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
 Foot cap    : {CAP_R*2:.0f} mm dia x {CAP_H:.0f} mm    (retained inside scale body)
 Locate pins : {PIN_R*2:.0f} mm dia x {PIN_H:.0f} mm  at {PIN_SPACING:.0f} mm C-C (fits load cell M4 holes)
