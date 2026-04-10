@@ -16,10 +16,9 @@ Outputs two separate STL files:
        4 T-shaped feet laid out flat for printing
        Each foot:
          - Stem  : 20 mm dia x 14 mm  (snug in 21.5 mm body holes)
-         - Cap   : 36 mm dia x  3 mm  (sits inside body, wider than hole so it
-                   can't fall through; rests on interior ledge above hole)
-         - Recess: 24 mm x 10 mm x 2 mm deep centred on cap top
-           (clears the raised boss on load cell free end)
+         - Cap   : 28 mm x 14 mm x 3 mm rectangular box (glued to load cell boss)
+         - Recess: 24 mm x 10 mm x 5 mm deep centred on cap top
+           (pocket seats over load cell raised boss)
 
   Assembly:
     1. Drop each foot in from the top of the scale body, cap down
@@ -50,19 +49,21 @@ COVER_HOLE_R   =  10.75  # mm, hole in cover plate (= body hole radius, 21.5 mm 
 # Foot geometry
 STEM_R         =  10.0   # mm radius = 20 mm dia  (snug in 21.5 mm body holes)
 STEM_H         =  14.0   # mm stem height
-CAP_R          =  18.0   # mm radius = 36 mm dia  (wider than 21.5 mm hole, retained inside body)
-CAP_H          =   3.0   # mm, cap thickness
 
-# Recess on cap top (clears raised boss on load cell free end)
-RECESS_L       =  24.0   # mm long dimension
-RECESS_W       =  10.0   # mm short dimension
-RECESS_D       =   5.0   # mm depth
+# Cap is a rectangular box sized to just hold the recess pocket (glued to load cell boss)
+RECESS_L       =  24.0   # mm long dimension of pocket
+RECESS_W       =  10.0   # mm short dimension of pocket
+RECESS_D       =   5.0   # mm pocket depth
+CAP_MARGIN     =   2.0   # mm wall around pocket on each side
+CAP_L          =  RECESS_L + CAP_MARGIN * 2   # 28 mm
+CAP_W          =  RECESS_W + CAP_MARGIN * 2   # 14 mm
+CAP_H          =   3.0   # mm cap thickness (+ recess cut from top)
 
 FOOT_CENTERS = [
-    ( 39.0,  39.0),
-    (171.0,  39.0),
-    ( 39.0, 171.0),
-    (171.0, 171.0),
+    ( 43.0,  43.0),
+    (167.0,  43.0),
+    ( 43.0, 167.0),
+    (167.0, 167.0),
 ]
 
 RUBBER_R       =   8.0
@@ -97,19 +98,20 @@ def make_foot(cx, cy, z_bottom):
     """
     T-shaped foot centred at (cx, cy).
     Stem from z_bottom up to z_bottom+STEM_H.
-    Cap on top of stem (z_bottom+STEM_H to z_bottom+STEM_H+CAP_H).
-    Rectangular recess centred on cap top for load cell raised boss.
+    Rectangular cap on top of stem (28 x 14 x CAP_H mm), glued to load cell boss.
+    Pocket (24 x 10 x 5 mm) cut into cap top to seat over load cell raised boss.
     """
-    # Build stem + cap
+    # Stem
     stem = trimesh.creation.cylinder(radius=STEM_R, height=STEM_H, sections=SECTIONS)
     stem = translate(stem, cx, cy, z_bottom + STEM_H / 2)
 
-    cap = trimesh.creation.cylinder(radius=CAP_R, height=CAP_H, sections=SECTIONS)
+    # Rectangular cap
+    cap = trimesh.creation.box(extents=[CAP_L, CAP_W, CAP_H])
     cap = translate(cap, cx, cy, z_bottom + STEM_H + CAP_H / 2)
 
     foot = trimesh.boolean.union([stem, cap], engine="manifold")
 
-    # Rectangular recess on cap top (clears load cell boss)
+    # Rectangular pocket on cap top (seats over load cell boss)
     cap_top_z = z_bottom + STEM_H + CAP_H
     recess = trimesh.creation.box(extents=[RECESS_L, RECESS_W, RECESS_D + 0.1])
     recess = translate(recess, cx, cy, cap_top_z - RECESS_D / 2)
@@ -169,7 +171,7 @@ print("\nBuilding feet ...")
 
 # Lay out 4 feet in a 2x2 grid (printed stem-up, cap flat on print bed)
 # Add 5 mm spacing between feet
-spacing = CAP_R * 2 + 5.0
+spacing = CAP_L + 5.0
 layout = [
     (0,       0      ),
     (spacing, 0      ),
@@ -179,10 +181,7 @@ layout = [
 
 all_feet = []
 for lx, ly in layout:
-    # Each foot has its cap at Z=0 (flat on bed), stem pointing up
-    # Cap centre at (lx + CAP_R, ly + CAP_R, CAP_H/2)
-    # We build foot with stem below cap, then flip: stem at top, cap at bottom for printing
-    foot = make_foot(lx + CAP_R, ly + CAP_R, 0)
+    foot = make_foot(lx + CAP_L / 2, ly + CAP_W / 2, 0)
     all_feet.append(foot)
 
 # Union all 4 into one file
@@ -199,6 +198,6 @@ Summary
 Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm corners | {COVER_HOLE_R*2:.1f} mm foot holes
 Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
-Foot cap    : {CAP_R*2:.0f} mm dia x {CAP_H:.0f} mm    (retained inside scale body)
-Cap recess  : {RECESS_L:.0f} mm x {RECESS_W:.0f} mm x {RECESS_D:.0f} mm deep (clears load cell boss)
+Foot cap    : {CAP_L:.0f} mm x {CAP_W:.0f} mm x {CAP_H:.0f} mm rectangular (glued to load cell boss)
+Cap pocket  : {RECESS_L:.0f} mm x {RECESS_W:.0f} mm x {RECESS_D:.0f} mm deep (seats over load cell boss)
 """)
