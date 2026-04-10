@@ -56,7 +56,7 @@ CAP_H          =   3.0   # mm, cap thickness
 # Recess on cap top (clears raised boss on load cell free end)
 RECESS_L       =  24.0   # mm long dimension
 RECESS_W       =  10.0   # mm short dimension
-RECESS_D       =   2.0   # mm depth
+RECESS_D       =   5.0   # mm depth
 
 FOOT_CENTERS = [
     ( 39.0,  39.0),
