@@ -58,8 +58,8 @@ CAP_MARGIN     =   2.0   # mm wall around pocket on short sides only
 CAP_L          =  RECESS_L + CAP_MARGIN * 2   # 28 mm
 CAP_W          =  RECESS_W + CAP_MARGIN * 2   # 14 mm
 CAP_H          =   3.0   # mm cap thickness
-# Slot is open-ended (extends through both ends of cap) so wires/cement exit freely
-SLOT_L         =  CAP_L + 2.0   # 30 mm — punches through both ends of cap
+# Slot is open on the sides (extends through both long sides of cap) so wires exit freely
+SLOT_W         =  CAP_W + 2.0   # 16 mm — punches through both side walls of cap
 
 FOOT_CENTERS = [
     ( 43.0,  43.0),
@@ -113,9 +113,9 @@ def make_foot(cx, cy, z_bottom):
 
     foot = trimesh.boolean.union([stem, cap], engine="manifold")
 
-    # Open-ended slot on cap top — extends through both ends so wires/cement exit freely
+    # Open-sided slot on cap top — extends through both long sides so wires exit freely
     cap_top_z = z_bottom + STEM_H + CAP_H
-    recess = trimesh.creation.box(extents=[SLOT_L, RECESS_W, RECESS_D + 0.1])
+    recess = trimesh.creation.box(extents=[RECESS_L, SLOT_W, RECESS_D + 0.1])
     recess = translate(recess, cx, cy, cap_top_z - RECESS_D / 2)
 
     return trimesh.boolean.difference([foot, recess], engine="manifold")
@@ -201,5 +201,5 @@ Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm c
 Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
 Foot cap    : {CAP_L:.0f} mm x {CAP_W:.0f} mm x {CAP_H:.0f} mm rectangular (glued to load cell boss)
-Cap slot    : {SLOT_L:.0f} mm x {RECESS_W:.0f} mm x {RECESS_D:.0f} mm deep open-ended slot (boss fits in 24x10 centre, wires exit ends)
+Cap slot    : {RECESS_L:.0f} mm x {SLOT_W:.0f} mm x {RECESS_D:.0f} mm deep open-sided slot (boss fits in 24x10 centre, wires exit long sides)
 """)
