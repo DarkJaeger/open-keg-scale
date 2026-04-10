@@ -27,9 +27,8 @@ Outputs two separate STL files:
     3. Cover plate slides on from below, closing the bottom
     4. Load cell free ends rest on caps and are located by the 2 pins (28 mm C-C)
 
-  Scale body: 210 x 210 x 15 mm
-    Corner holes: 21.5 mm dia at bottom face, cavity opens to ~39 mm at mid-height
-    Hole centres: (32,32), (178,32), (32,178), (178,178)
+  Scale body: 210 x 210 x 15 mm, outer corner radius = 12 mm
+    Foot hole centres: 51 mm from each corner edge = (51,51),(159,51),(51,159),(159,159)
 """
 
 import trimesh
@@ -40,7 +39,7 @@ from shapely.ops import unary_union
 # ── Parameters ────────────────────────────────────────────────────────────────
 SCALE_W        = 210.0
 SCALE_D        = 210.0
-CORNER_R       =  32.0   # matches scale body corner radius
+CORNER_R       =  12.0   # matches scale body corner radius (verified from STL arc fit)
 
 PLATE_H        =   5.0   # mm, cover plate thickness
 WALL_T         =   3.0   # mm, side wall thickness
@@ -60,10 +59,10 @@ PIN_H          =   4.0   # mm tall
 PIN_SPACING    =  28.0   # mm C-C  (matches load cell mounting hole spacing)
 
 FOOT_CENTERS = [
-    ( 32.0,  32.0),
-    (178.0,  32.0),
-    ( 32.0, 178.0),
-    (178.0, 178.0),
+    ( 51.0,  51.0),
+    (159.0,  51.0),
+    ( 51.0, 159.0),
+    (159.0, 159.0),
 ]
 
 RUBBER_R       =   8.0
@@ -79,13 +78,18 @@ def translate(mesh, tx, ty, tz):
 
 
 def rounded_rect_extrusion(w, d, r, h, sections=SECTIONS):
-    corners = [
+    from shapely.geometry import box as shbox
+    corner_pts = [
         Point(r,     r    ),
         Point(w - r, r    ),
         Point(r,     d - r),
         Point(w - r, d - r),
     ]
-    poly = unary_union([c.buffer(r, resolution=sections // 4) for c in corners]).convex_hull
+    # Union of 4 corner circles + 2 axis-aligned strips = proper rounded rectangle
+    circles = [c.buffer(r, resolution=sections // 4) for c in corner_pts]
+    h_strip = shbox(r, 0, w - r, d)
+    v_strip = shbox(0, r, w, d - r)
+    poly = unary_union(circles + [h_strip, v_strip])
     return trimesh.creation.extrude_polygon(poly, h)
 
 
