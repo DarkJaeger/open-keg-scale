@@ -51,13 +51,15 @@ STEM_R         =  10.0   # mm radius = 20 mm dia  (snug in 21.5 mm body holes)
 STEM_H         =  14.0   # mm stem height
 
 # Cap is a rectangular box sized to just hold the recess pocket (glued to load cell boss)
-RECESS_L       =  24.0   # mm long dimension of pocket
-RECESS_W       =  10.0   # mm short dimension of pocket
+RECESS_L       =  24.0   # mm long dimension of boss
+RECESS_W       =  10.0   # mm short dimension of boss
 RECESS_D       =   5.0   # mm pocket depth
-CAP_MARGIN     =   2.0   # mm wall around pocket on each side
+CAP_MARGIN     =   2.0   # mm wall around pocket on short sides only
 CAP_L          =  RECESS_L + CAP_MARGIN * 2   # 28 mm
 CAP_W          =  RECESS_W + CAP_MARGIN * 2   # 14 mm
-CAP_H          =   3.0   # mm cap thickness (+ recess cut from top)
+CAP_H          =   3.0   # mm cap thickness
+# Slot is open-ended (extends through both ends of cap) so wires/cement exit freely
+SLOT_L         =  CAP_L + 2.0   # 30 mm — punches through both ends of cap
 
 FOOT_CENTERS = [
     ( 43.0,  43.0),
@@ -111,9 +113,9 @@ def make_foot(cx, cy, z_bottom):
 
     foot = trimesh.boolean.union([stem, cap], engine="manifold")
 
-    # Rectangular pocket on cap top (seats over load cell boss)
+    # Open-ended slot on cap top — extends through both ends so wires/cement exit freely
     cap_top_z = z_bottom + STEM_H + CAP_H
-    recess = trimesh.creation.box(extents=[RECESS_L, RECESS_W, RECESS_D + 0.1])
+    recess = trimesh.creation.box(extents=[SLOT_L, RECESS_W, RECESS_D + 0.1])
     recess = translate(recess, cx, cy, cap_top_z - RECESS_D / 2)
 
     return trimesh.boolean.difference([foot, recess], engine="manifold")
@@ -199,5 +201,5 @@ Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm c
 Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
 Foot cap    : {CAP_L:.0f} mm x {CAP_W:.0f} mm x {CAP_H:.0f} mm rectangular (glued to load cell boss)
-Cap pocket  : {RECESS_L:.0f} mm x {RECESS_W:.0f} mm x {RECESS_D:.0f} mm deep (seats over load cell boss)
+Cap slot    : {SLOT_L:.0f} mm x {RECESS_W:.0f} mm x {RECESS_D:.0f} mm deep open-ended slot (boss fits in 24x10 centre, wires exit ends)
 """)
