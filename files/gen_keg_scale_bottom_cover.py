@@ -59,10 +59,10 @@ PIN_H          =   4.0   # mm tall
 PIN_SPACING    =  28.0   # mm C-C  (matches load cell mounting hole spacing)
 
 FOOT_CENTERS = [
-    ( 69.0,  69.0),
-    (141.0,  69.0),
-    ( 69.0, 141.0),
-    (141.0, 141.0),
+    ( 33.0,  33.0),
+    (177.0,  33.0),
+    ( 33.0, 177.0),
+    (177.0, 177.0),
 ]
 
 RUBBER_R       =   8.0
