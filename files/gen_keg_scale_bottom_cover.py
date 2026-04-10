@@ -55,7 +55,7 @@ STEM_H         =  14.0   # mm stem height
 # Boss is held by the 10 mm side walls; 5 mm of stem wall remains on each side
 POCKET_L       =  24.0   # mm (measured boss length)
 POCKET_W       =  10.0   # mm (measured boss width — confirmed correct)
-POCKET_D       =   3.0   # mm depth (boss protrudes 2.5 mm)
+POCKET_D       =   2.0   # mm depth
 
 FOOT_CENTERS = [
     ( 43.0,  43.0),
