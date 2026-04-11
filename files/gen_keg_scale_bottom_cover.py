@@ -16,9 +16,9 @@ Outputs two separate STL files:
        4 T-shaped feet laid out flat for printing
        Each foot:
          - Stem  : 20 mm dia x 14 mm  (snug in 21.5 mm body holes)
-         - Pocket: 24 mm x 10 mm x 3 mm deep centred on stem top
-           (caliper-measured boss; 24 mm breaks through stem ends forming open cradle)
-           Foot is glued to load cell boss
+         - Cap   : 36 mm dia x  3 mm  (sits inside body above hole)
+         - Pocket: 24 mm x 10 mm x 2 mm deep centred on cap top
+           (seats over caliper-measured GML692 boss; glued in place)
 
   Assembly:
     1. Drop each foot in from the top of the scale body, cap down
@@ -50,11 +50,12 @@ COVER_HOLE_R   =  10.75  # mm, hole in cover plate (= body hole radius, 21.5 mm 
 STEM_R         =  10.0   # mm radius = 20 mm dia  (snug in 21.5 mm body holes)
 STEM_H         =  14.0   # mm stem height
 
-# Pocket in stem top seats over GML692 boss (measured 24 x 10 mm with calipers)
-# 24 mm exceeds 20 mm stem dia — slot breaks through both ends of stem (open-ended cradle)
-# Boss is held by the 10 mm side walls; 5 mm of stem wall remains on each side
-POCKET_L       =  24.0   # mm (measured boss length)
-POCKET_W       =  10.0   # mm (measured boss width — confirmed correct)
+CAP_R          =  18.0   # mm radius = 36 mm dia (wider than hole, retained inside body)
+CAP_H          =   3.0   # mm cap thickness
+
+# Pocket in cap top seats over GML692 boss (caliper-measured 24 x 10 mm)
+POCKET_L       =  24.0   # mm boss length
+POCKET_W       =  10.0   # mm boss width (confirmed correct)
 POCKET_D       =   2.0   # mm depth
 
 FOOT_CENTERS = [
@@ -94,19 +95,25 @@ def rounded_rect_extrusion(w, d, r, h, sections=SECTIONS):
 
 def make_foot(cx, cy, z_bottom):
     """
-    Simple foot centred at (cx, cy) — stem only, no cap.
+    T-shaped foot centred at (cx, cy).
     Stem from z_bottom up to z_bottom+STEM_H.
-    Pocket in stem top seats over GML692 boss; foot glued in place.
+    Cap on top of stem (36 mm dia x CAP_H).
+    Pocket in cap top seats over GML692 boss; foot glued in place.
     """
     stem = trimesh.creation.cylinder(radius=STEM_R, height=STEM_H, sections=SECTIONS)
     stem = translate(stem, cx, cy, z_bottom + STEM_H / 2)
 
-    # Pocket centred on stem top
-    stem_top_z = z_bottom + STEM_H
-    pocket = trimesh.creation.box(extents=[POCKET_L, POCKET_W, POCKET_D + 0.1])
-    pocket = translate(pocket, cx, cy, stem_top_z - POCKET_D / 2)
+    cap = trimesh.creation.cylinder(radius=CAP_R, height=CAP_H, sections=SECTIONS)
+    cap = translate(cap, cx, cy, z_bottom + STEM_H + CAP_H / 2)
 
-    return trimesh.boolean.difference([stem, pocket], engine="manifold")
+    foot = trimesh.boolean.union([stem, cap], engine="manifold")
+
+    # Pocket centred on cap top
+    cap_top_z = z_bottom + STEM_H + CAP_H
+    pocket = trimesh.creation.box(extents=[POCKET_L, POCKET_W, POCKET_D + 0.1])
+    pocket = translate(pocket, cx, cy, cap_top_z - POCKET_D / 2)
+
+    return trimesh.boolean.difference([foot, pocket], engine="manifold")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -159,9 +166,8 @@ print(f"  Saved  ->  {cover_path}")
 # ════════════════════════════════════════════════════════════════════════════════
 print("\nBuilding feet ...")
 
-# Lay out 4 feet in a 2x2 grid (printed with pocket facing up)
-# Space by stem diameter + 5 mm gap
-spacing = STEM_R * 2 + 5.0
+# Lay out 4 feet in a 2x2 grid (cap flat on bed, stem pointing up)
+spacing = CAP_R * 2 + 5.0
 layout = [
     (0,       0      ),
     (spacing, 0      ),
@@ -171,7 +177,7 @@ layout = [
 
 all_feet = []
 for lx, ly in layout:
-    foot = make_foot(lx + STEM_R, ly + STEM_R, 0)
+    foot = make_foot(lx + CAP_R, ly + CAP_R, 0)
     all_feet.append(foot)
 
 # Union all 4 into one file
@@ -188,5 +194,6 @@ Summary
 Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm corners | {COVER_HOLE_R*2:.1f} mm foot holes
 Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
-Stem pocket : {POCKET_L:.0f} mm x {POCKET_W:.0f} mm x {POCKET_D:.0f} mm deep (caliper-measured boss; open cradle on 24 mm axis)
+Foot cap    : {CAP_R*2:.0f} mm dia x {CAP_H:.0f} mm (retained inside body)
+Cap pocket  : {POCKET_L:.0f} mm x {POCKET_W:.0f} mm x {POCKET_D:.0f} mm deep (caliper-measured GML692 boss)
 """)
