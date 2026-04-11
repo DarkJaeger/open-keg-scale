@@ -58,10 +58,10 @@ POCKET_W       =  10.0   # mm (measured boss width — confirmed correct)
 POCKET_D       =   2.0   # mm depth
 
 FOOT_CENTERS = [
-    ( 43.0,  43.0),
-    (167.0,  43.0),
-    ( 43.0, 167.0),
-    (167.0, 167.0),
+    ( 40.0,  40.0),
+    (170.0,  40.0),
+    ( 40.0, 170.0),
+    (170.0, 170.0),
 ]
 
 RUBBER_R       =   8.0
