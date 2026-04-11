@@ -15,10 +15,8 @@ Outputs two separate STL files:
   2. keg_scale_feet.stl
        4 T-shaped feet laid out flat for printing
        Each foot:
-         - Stem  : 20 mm dia x 14 mm  (snug in 21.5 mm body holes)
+         - Stem  : 20 mm dia x 18 mm  (snug in 21.5 mm body holes)
          - Cap   : 36 mm dia x  3 mm  (sits inside body above hole)
-         - Pocket: 24 mm x 10 mm x 2 mm deep centred on cap top
-           (seats over caliper-measured GML692 boss; glued in place)
 
   Assembly:
     1. Drop each foot in from the top of the scale body, cap down
@@ -48,15 +46,10 @@ COVER_HOLE_R   =  10.75  # mm, hole in cover plate (= body hole radius, 21.5 mm 
 
 # Foot geometry
 STEM_R         =  10.0   # mm radius = 20 mm dia  (snug in 21.5 mm body holes)
-STEM_H         =  14.0   # mm stem height
+STEM_H         =  18.0   # mm stem height
 
 CAP_R          =  18.0   # mm radius = 36 mm dia (wider than hole, retained inside body)
 CAP_H          =   3.0   # mm cap thickness
-
-# Pocket in cap top seats over GML692 boss (caliper-measured 24 x 10 mm)
-POCKET_L       =  24.0   # mm boss length
-POCKET_W       =  10.0   # mm boss width (confirmed correct)
-POCKET_D       =   2.0   # mm depth
 
 FOOT_CENTERS = [
     ( 40.0,  40.0),
@@ -98,7 +91,6 @@ def make_foot(cx, cy, z_bottom):
     T-shaped foot centred at (cx, cy).
     Stem from z_bottom up to z_bottom+STEM_H.
     Cap on top of stem (36 mm dia x CAP_H).
-    Pocket in cap top seats over GML692 boss; foot glued in place.
     """
     stem = trimesh.creation.cylinder(radius=STEM_R, height=STEM_H, sections=SECTIONS)
     stem = translate(stem, cx, cy, z_bottom + STEM_H / 2)
@@ -106,14 +98,7 @@ def make_foot(cx, cy, z_bottom):
     cap = trimesh.creation.cylinder(radius=CAP_R, height=CAP_H, sections=SECTIONS)
     cap = translate(cap, cx, cy, z_bottom + STEM_H + CAP_H / 2)
 
-    foot = trimesh.boolean.union([stem, cap], engine="manifold")
-
-    # Pocket centred on cap top
-    cap_top_z = z_bottom + STEM_H + CAP_H
-    pocket = trimesh.creation.box(extents=[POCKET_L, POCKET_W, POCKET_D + 0.1])
-    pocket = translate(pocket, cx, cy, cap_top_z - POCKET_D / 2)
-
-    return trimesh.boolean.difference([foot, pocket], engine="manifold")
+    return trimesh.boolean.union([stem, cap], engine="manifold")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -195,5 +180,4 @@ Cover plate : 210 x 210 x {PLATE_H:.0f} mm base + {WALL_H:.2f} mm wall | 32 mm c
 Wall        : {WALL_T:.0f} mm thick x {WALL_H:.2f} mm tall (5.25 load cell + 3.00 cap clearance)
 Foot stem   : {STEM_R*2:.0f} mm dia x {STEM_H:.0f} mm   (snug in {COVER_HOLE_R*2:.1f} mm holes)
 Foot cap    : {CAP_R*2:.0f} mm dia x {CAP_H:.0f} mm (retained inside body)
-Cap pocket  : {POCKET_L:.0f} mm x {POCKET_W:.0f} mm x {POCKET_D:.0f} mm deep (caliper-measured GML692 boss)
 """)
