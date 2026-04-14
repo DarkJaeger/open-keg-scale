@@ -1,0 +1,64 @@
+/*
+ * HX711 Calibration Sketch for D1 Mini
+ * ─────────────────────────────────────
+ * 1. Flash this sketch
+ * 2. Open Serial Monitor @ 115200
+ * 3. Follow prompts — place known weight when asked
+ * 4. Note the printed CALIBRATION_FACTOR
+ * 5. Paste it into main.cpp → CALIBRATION_FACTOR
+ *
+ * Wiring:
+ *   HX711 DOUT → D5 (GPIO14)
+ *   HX711 SCK  → D6 (GPIO12)
+ */
+
+#include <Arduino.h>
+#include <HX711.h>
+
+#define DOUT_PIN 14
+#define SCK_PIN  12
+#define KNOWN_WEIGHT_KG 10.0f   // ← change to your calibration weight
+
+HX711 scale;
+
+void setup() {
+    Serial.begin(115200);
+    delay(500);
+
+    Serial.println("\n=== HX711 Calibration ===");
+    Serial.println("Make sure nothing is on the scale.");
+    Serial.println("Press ENTER to tare...");
+    while (!Serial.available()) { yield(); }
+    while (Serial.available()) Serial.read();
+
+    scale.begin(DOUT_PIN, SCK_PIN);
+    scale.tare(20);
+    Serial.println("Tared.");
+
+    Serial.printf("Now place %.1f kg on the scale.\n", KNOWN_WEIGHT_KG);
+    Serial.println("Press ENTER when ready...");
+    while (!Serial.available()) { yield(); }
+    while (Serial.available()) Serial.read();
+
+    long raw = scale.get_value(20);
+    float calFactor = (float)raw / KNOWN_WEIGHT_KG;
+
+    Serial.printf("\nRaw reading:         %ld\n", raw);
+    Serial.printf("Calibration factor:  %.2f\n", calFactor);
+    Serial.printf("\nPaste into main.cpp:\n  #define CALIBRATION_FACTOR  %.2ff\n", calFactor);
+
+    // Verify
+    scale.set_scale(calFactor);
+    Serial.println("\nVerification (should read close to known weight):");
+    for (int i = 0; i < 5; i++) {
+        Serial.printf("  %.3f kg\n", scale.get_units(10));
+        delay(500);
+    }
+}
+
+void loop() {
+    scale.set_scale(scale.get_scale());  // keep reading
+    Serial.printf("Live: %.3f kg  (cal=%.2f)\n",
+                  scale.get_units(5), scale.get_scale());
+    delay(800);
+}
