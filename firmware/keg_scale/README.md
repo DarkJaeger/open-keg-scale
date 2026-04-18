@@ -2,6 +2,7 @@
 
 Arduino sketch for **Wemos D1 Mini (ESP8266)** + **HX711** + **4 × 50 kg half-bridge load cells**.  
 Reports keg weight / volume to [open-plaato-keg](https://github.com/DarkJaeger/open-plaato-keg) using the Blynk binary TCP protocol.
+After the initial USB flash, it also supports **Arduino OTA** updates over WiFi.
 
 ---
 
@@ -85,6 +86,8 @@ Install both via **Arduino IDE → Tools → Manage Libraries**:
 
 Board: **LOLIN(WEMOS) D1 mini** (under *ESP8266 Boards* – install ESP8266 core via Board Manager if needed).
 
+`ArduinoOTA` comes with the ESP8266 board core, so there is no separate library to install for OTA updates.
+
 ---
 
 ## First-Time Setup
@@ -98,12 +101,49 @@ Board: **LOLIN(WEMOS) D1 mini** (under *ESP8266 Boards* – install ESP8266 core
      (e.g. `192.168.1.50`)
    - **Server Port** – default `1234`
    - **Auth Token** – the 32-character hex token from the open-plaato-keg web UI
+   - **Calibration Factor** – optional, if you already know the factor for this scale
    - **Max Keg Volume (L)** – e.g. `19` for a standard Cornelius keg
    - **Beer Name** – displayed in the UI
 5. Click **Save**. The device reboots and connects automatically.
 
 > To reconfigure, hold the FLASH button for **4+ seconds** – this wipes the
 > saved WiFi credentials and restarts the setup portal.
+> On enclosed units, you can also use the local web UI and click
+> **Reset WiFi / Enter Setup Mode** to wipe credentials and return to
+> `KegScale-Setup` without opening the enclosure.
+
+---
+
+## OTA Updates
+
+After the board has been flashed once over USB and joined WiFi successfully, it will advertise an Arduino OTA target on your local network.
+
+- **Hostname:** `keg-scale-<chipid>`
+- **Password:** the same 32-character auth token configured for the server
+
+In Arduino IDE:
+
+1. Make sure your computer is on the same network as the keg scale.
+2. Wait for the board to boot and connect to WiFi.
+3. Open **Tools → Port** and choose the **network port** for `keg-scale-...`.
+4. Click **Upload**.
+5. When prompted, enter the auth token as the OTA password.
+
+Serial output will show OTA status messages and progress during the update.
+
+### Browser-based OTA
+
+The firmware also serves a simple web page on the device IP:
+
+- **Status page:** `http://<device-ip>/`
+- **Firmware upload:** `http://<device-ip>/update`
+
+If an auth token is configured, log in with:
+
+- **Username:** `admin`
+- **Password:** the same 32-character auth token
+
+This is the simplest update path when Arduino IDE does not discover the board automatically over the network.
 
 ---
 
