@@ -111,6 +111,7 @@
 #include <ESP8266HTTPUpdateServer.h>
 #include <WiFiManager.h>          // tzapu/WiFiManager
 #include <HX711.h>                // bogde/HX711
+#include <Adafruit_BMP085.h>
 #include <EEPROM.h>
 
 // ─── Pin Definitions ──────────────────────────────────────────────────────────
@@ -122,9 +123,9 @@
 
 // ─── Compile-Time Constants ────────────────────────────────────────────────────
 
-#define FW_VERSION          "1.0.1-webui"
+#define FW_VERSION          "1.0.6-units"
 
-#define EEPROM_MAGIC        0xA5    // Sentinel to detect initialised config
+#define EEPROM_MAGIC        0xA6    // Sentinel to detect initialised config (bumped for temp_offset_c field)
 #define EEPROM_SIZE         256
 
 #define DEFAULT_SERVER_PORT 1234
@@ -138,6 +139,7 @@
 #define POUR_DELTA_G        30      // g change to classify as "pouring"
 #define POUR_SETTLE_MS      2000    // ms of stability before pour ends
 #define POUR_ARM_DELAY_MS   5000    // Ignore pour detection briefly after tare/boot
+#define BMP180_READ_INTERVAL_MS 5000
 
 // ─── Blynk Command Codes ──────────────────────────────────────────────────────
 
@@ -159,18 +161,21 @@
 #define VP_TEMPERATURE     "56"
 #define VP_LAST_POUR       "59"
 #define VP_TARE            "60"   // receive "1" → tare
-#define VP_CALIBRATE       "61"   // receive grams → calibrate
+#define VP_CALIBRATE       "61"   // receive current display weight → calibrate
 #define VP_EMPTY_KEG       "62"   // receive "1" → capture current as empty
 #define VP_BEER_NAME       "64"
 #define VP_DATE            "67"
+#define VP_TEMP_STRING     "69"
 #define VP_UNIT            "71"   // "1"=metric  "2"=US
 #define VP_WEIGHT_UNIT     "73"
 #define VP_BEER_LEFT_UNIT  "74"
 #define VP_MEASURE_UNIT    "75"   // "1"=weight  "2"=volume
-#define VP_MAX_KEG_VOL     "76"   // litres
+#define VP_MAX_KEG_VOL     "76"   // current display volume
+#define VP_TEMP_UNIT       "80"
 #define VP_WIFI_RSSI       "81"
 #define VP_VOLUME_UNIT     "82"
 #define VP_FIRMWARE_VER    "93"
+#define VP_TEMP_OFFSET     "52"   // receive offset in current display unit
 
 // ─── Config Struct (persisted in EEPROM) ──────────────────────────────────────
 
@@ -184,11 +189,15 @@ struct Config {
   uint32_t empty_keg_g;        // Empty keg mass in grams
   uint32_t max_vol_ml;         // Full keg volume in mL
   char     beer_name[32];
+  float    temp_offset_c;      // Temperature calibration offset in °C
+  uint8_t  unit_system;        // 1=metric, 2=US/imperial
+  uint8_t  measure_unit;       // 1=weight, 2=volume
 };
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 HX711      scale;
+Adafruit_BMP085 bmp180;
 WiFiClient client;
 ESP8266WebServer webServer(80);
 ESP8266HTTPUpdateServer httpUpdater;
@@ -213,6 +222,9 @@ bool     have_baseline  = false;
 bool     ota_in_progress = false;
 uint32_t pour_arm_ms    = 0;
 float    instant_weight_g = 0.0f;
+bool     bmp180_present  = false;
+float    bmp180_temp_c   = 0.0f;
+uint32_t last_bmp180_ms  = 0;
 
 // Deferred actions from the web UI to avoid doing long HX711 work inside HTTP handlers
 bool     pending_tare           = false;
@@ -235,6 +247,7 @@ WiFiManagerParameter *p_token  = nullptr;
 WiFiManagerParameter *p_cal    = nullptr;
 WiFiManagerParameter *p_keg    = nullptr;
 WiFiManagerParameter *p_name   = nullptr;
+WiFiManagerParameter *p_temp   = nullptr;
 
 // ─── EEPROM Helpers ───────────────────────────────────────────────────────────
 
@@ -251,8 +264,16 @@ void loadConfig() {
     cfg.tare_offset  = 0;
     cfg.empty_keg_g  = 4000;    // ~4 kg typical Cornelius keg
     cfg.max_vol_ml   = 19000;   // 19 L Cornelius keg
+    cfg.temp_offset_c = 0.0f;   // No temperature offset by default
+    cfg.unit_system  = 1;
+    cfg.measure_unit = 2;
     strncpy(cfg.beer_name, "Beer", sizeof(cfg.beer_name) - 1);
+    saveConfig();
+    Serial.println(F("[Config] EEPROM reset - defaults saved"));
   }
+
+  if (cfg.unit_system != 1 && cfg.unit_system != 2) cfg.unit_system = 1;
+  if (cfg.measure_unit != 1 && cfg.measure_unit != 2) cfg.measure_unit = 2;
 }
 
 void saveConfig() {
@@ -329,7 +350,7 @@ void handleWebState() {
   long raw_delta = raw_adc - raw_offset;
 
   String json;
-  json.reserve(340);
+  json.reserve(420);
   json += F("{\"weight_g\":");
   json += String(weight_g, 1);
   json += F(",\"instant_weight_g\":");
@@ -346,6 +367,12 @@ void handleWebState() {
   json += String(cfg.empty_keg_g);
   json += F(",\"max_vol_l\":");
   json += String((float)cfg.max_vol_ml / 1000.0f, 2);
+  json += F(",\"temp_offset_c\":");
+  json += String(cfg.temp_offset_c, 2);
+  json += F(",\"temp_c\":");
+  json += String(bmp180_temp_c, 1);
+  json += F(",\"bmp180_present\":");
+  json += bmp180_present ? F("true") : F("false");
   json += F(",\"beer_name\":\"");
   json += jsonEscape(String(cfg.beer_name));
   json += F("\",\"blynk\":\"");
@@ -406,6 +433,20 @@ void handleWebSetEmptyKeg() {
   }
 }
 
+void handleWebSetTempOffset() {
+  if (!ensureWebAuth()) return;
+  if (!webServer.hasArg("offset_c")) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"msg\":\"offset_c required\"}");
+    return;
+  }
+
+  float offset_c = webServer.arg("offset_c").toFloat();
+  cfg.temp_offset_c = offset_c;
+  saveConfig();
+  Serial.printf("[Temp] Temperature offset set to %.2f °C\n", cfg.temp_offset_c);
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 void handleWebResetSetup() {
   if (!ensureWebAuth()) return;
 
@@ -451,11 +492,13 @@ void handleWebRoot() {
     "<div class='muted'>ADC: <span class='mono' id='raw_adc'>--</span></div>"
     "<div class='muted'>Offset: <span class='mono' id='raw_offset'>--</span></div>"
     "<div class='muted'>Blynk: <span id='blynk'>--</span></div>"
+    "<div class='muted'>Temperature: <span class='mono' id='temp_c'>--</span></div>"
     "<dl><dt>IP</dt><dd class='mono' id='ip'>--</dd>"
     "<dt>Beer</dt><dd id='beer_name'>--</dd>"
     "<dt>Calibration</dt><dd class='mono' id='cal_factor'>--</dd>"
     "<dt>Empty Keg</dt><dd class='mono' id='empty_keg_g'>--</dd>"
-    "<dt>Max Volume</dt><dd class='mono' id='max_vol_l'>--</dd></dl></section>"
+    "<dt>Max Volume</dt><dd class='mono' id='max_vol_l'>--</dd>"
+    "<dt>Temp Offset</dt><dd class='mono' id='temp_offset_c'>--</dd></dl></section>"
     "<section class='card'><h2>Scale Actions</h2>"
     "<div class='row'><button onclick='postAction(\"/api/tare\")'>Tare Scale</button>"
     "<button class='alt' onclick='postAction(\"/api/empty-keg\")'>Capture Empty Keg</button></div>"
@@ -465,6 +508,9 @@ void handleWebRoot() {
     "<label for='empty_g'>Set Empty Keg Manually (grams)</label>"
     "<input id='empty_g' type='number' step='1' placeholder='optional manual override'>"
     "<div class='row' style='margin-top:10px'><button class='alt' onclick='setEmptyKegManual()'>Save Empty Keg</button></div>"
+    "<label for='temp_offset'>Temperature Offset (°C)</label>"
+    "<input id='temp_offset' type='number' step='0.1' placeholder='e.g. 27.8 for +50°F'>"
+    "<div class='row' style='margin-top:10px'><button class='alt' onclick='setTempOffset()'>Save Temp Offset</button></div>"
     "<div class='row' style='margin-top:18px'><button class='warn' onclick='resetToSetup()'>Reset WiFi / Enter Setup Mode</button></div>"
     "</section>"
     "<section class='card'><h2>Firmware</h2>"
@@ -484,10 +530,14 @@ void handleWebRoot() {
     "document.getElementById('beer_name').textContent=s.beer_name;"
     "document.getElementById('cal_factor').textContent=Number(s.cal_factor).toFixed(4);"
     "document.getElementById('empty_keg_g').textContent=`${Number(s.empty_keg_g).toFixed(0)} g`;"
-    "document.getElementById('max_vol_l').textContent=`${Number(s.max_vol_l).toFixed(2)} L`;}"
+    "document.getElementById('max_vol_l').textContent=`${Number(s.max_vol_l).toFixed(2)} L`;"
+    "document.getElementById('temp_offset_c').textContent=`${Number(s.temp_offset_c).toFixed(2)} °C`;"
+    "const tempC=Number(s.temp_c);const tempF=(tempC*9/5)+32;"
+    "document.getElementById('temp_c').textContent=s.bmp180_present?`${tempC.toFixed(1)} °C (${tempF.toFixed(1)} °F)`:'N/A';}"
     "function showMsg(text){const el=document.getElementById('msg');el.textContent=text;el.style.display='block';setTimeout(()=>el.style.display='none',3500)}"
     "async function postAction(url,body){const opts={method:'POST'};if(body){opts.headers={'Content-Type':'application/x-www-form-urlencoded'};opts.body=body;}const r=await fetch(url,opts);const t=await r.text();if(!r.ok){showMsg(t);return;}showMsg('Saved');refreshState();}"
     "function calibrate(){const v=document.getElementById('known_g').value.trim();if(!v){showMsg('Enter known weight in grams');return;}postAction('/api/calibrate',`known_g=${encodeURIComponent(v)}`)}"
+    "function setTempOffset(){const v=document.getElementById('temp_offset').value.trim();if(v===''){showMsg('Enter temperature offset');return;}postAction('/api/temp-offset',`offset_c=${encodeURIComponent(v)}`)}"
     "function setEmptyKegManual(){const v=document.getElementById('empty_g').value.trim();if(!v){showMsg('Enter empty keg grams');return;}postAction('/api/empty-keg',`empty_g=${encodeURIComponent(v)}`)}"
     "function resetToSetup(){if(!confirm('Reset WiFi settings and reboot into setup mode?'))return;postAction('/api/reset-setup')}"
     "refreshState();setInterval(refreshState,2000);"
@@ -502,6 +552,7 @@ void setupWebOTA() {
   webServer.on("/api/tare", HTTP_POST, handleWebTare);
   webServer.on("/api/calibrate", HTTP_POST, handleWebCalibrate);
   webServer.on("/api/empty-keg", HTTP_POST, handleWebSetEmptyKeg);
+  webServer.on("/api/temp-offset", HTTP_POST, handleWebSetTempOffset);
   webServer.on("/api/reset-setup", HTTP_POST, handleWebResetSetup);
 
   if (strlen(cfg.auth_token) > 0) {
@@ -659,6 +710,59 @@ float readWeightGrams() {
   return w;
 }
 
+void updateTemperatureReading() {
+  if (!bmp180_present) return;
+  uint32_t now = millis();
+  if (now - last_bmp180_ms < BMP180_READ_INTERVAL_MS) return;
+
+  last_bmp180_ms = now;
+  float temp_c = bmp180.readTemperature();
+  if (isnan(temp_c) || isinf(temp_c)) return;
+  bmp180_temp_c = temp_c + cfg.temp_offset_c;
+}
+
+bool isImperial() {
+  return cfg.unit_system == 2;
+}
+
+float gramsToDisplayWeight(float grams) {
+  float kg = grams / 1000.0f;
+  return isImperial() ? kg * 2.20462f : kg;
+}
+
+float displayWeightToGrams(float value) {
+  float kg = isImperial() ? value / 2.20462f : value;
+  return kg * 1000.0f;
+}
+
+float litersToDisplayVolume(float liters) {
+  return isImperial() ? liters * 0.264172f : liters;
+}
+
+float displayVolumeToLiters(float value) {
+  return isImperial() ? value / 0.264172f : value;
+}
+
+float celsiusToDisplayTemp(float celsius) {
+  return isImperial() ? (celsius * 9.0f / 5.0f) + 32.0f : celsius;
+}
+
+float displayTempOffsetToC(float offset) {
+  return isImperial() ? offset * 5.0f / 9.0f : offset;
+}
+
+const char *displayWeightUnit() {
+  return isImperial() ? "lbs" : "kg";
+}
+
+const char *displayVolumeUnit() {
+  return isImperial() ? "gal" : "litre";
+}
+
+const char *displayTempUnit() {
+  return isImperial() ? "°F" : "°C";
+}
+
 long readAverageRaw(uint8_t samples) {
   if (samples == 0) return scale.read();
 
@@ -763,21 +867,37 @@ void publishKegData(float weight_g) {
   if (pct > 100.0f) pct = 100.0f;
   if (pct <   0.0f) pct = 0.0f;
 
-  blynkSendPin(VP_WEIGHT_RAW,   weight_g, 0);
-  blynkSendPin(VP_VOLUME_RAW,   vol_L,    2);
-  blynkSendPin(VP_AMOUNT_LEFT,  vol_L,    2);
-  blynkSendPin(VP_PERCENT_LEFT, pct,      1);
+  updateTemperatureReading();
+  
+  float liquid_weight = gramsToDisplayWeight(liquid_g);
+  float volume = litersToDisplayVolume(vol_L);
+  float amount_left = (cfg.measure_unit == 1) ? liquid_weight : volume;
+  float temp = celsiusToDisplayTemp(bmp180_temp_c);
+
+  blynkSendPin(VP_WEIGHT_RAW,   liquid_weight, isImperial() ? 2 : 3);
+  blynkSendPin(VP_VOLUME_RAW,   volume, 2);
+  blynkSendPin(VP_AMOUNT_LEFT,  amount_left, 2);
+  blynkSendPin(VP_PERCENT_LEFT, pct,   1);
   blynkSendPin(VP_IS_POURING,   is_pouring ? "1" : "0");
+  if (bmp180_present) {
+    blynkSendPin(VP_TEMPERATURE, temp, 1);
+    char temp_string[24];
+    snprintf(temp_string, sizeof(temp_string), "%.1f%s", temp, displayTempUnit());
+    blynkSendPin(VP_TEMP_STRING, temp_string);
+  }
 }
 
 void publishStaticPins() {
-  blynkSendPin(VP_UNIT,         "1");               // metric
-  blynkSendPin(VP_MEASURE_UNIT, "2");               // report as volume
-  blynkSendPin(VP_WEIGHT_UNIT,  "kg");
-  blynkSendPin(VP_BEER_LEFT_UNIT,"L");
-  blynkSendPin(VP_VOLUME_UNIT,  "L");
-  blynkSendPin(VP_MAX_KEG_VOL,
-               String((float)cfg.max_vol_ml / 1000.0f, 2).c_str());
+  blynkSendPin(VP_UNIT,         String(cfg.unit_system).c_str());
+  blynkSendPin(VP_MEASURE_UNIT, String(cfg.measure_unit).c_str());
+  blynkSendPin(VP_WEIGHT_UNIT,  displayWeightUnit());
+  blynkSendPin(VP_BEER_LEFT_UNIT, cfg.measure_unit == 1 ? displayWeightUnit() : displayVolumeUnit());
+  blynkSendPin(VP_TEMP_UNIT,    displayTempUnit());
+  blynkSendPin(VP_VOLUME_UNIT,  displayVolumeUnit());
+  
+  // Max volume: send in units matching volume_unit
+  float max_vol = litersToDisplayVolume((float)cfg.max_vol_ml / 1000.0f);
+  blynkSendPin(VP_MAX_KEG_VOL, String(max_vol, 2).c_str());
   blynkSendPin(VP_BEER_NAME,    cfg.beer_name);
   blynkSendPin(VP_FIRMWARE_VER, FW_VERSION);
 
@@ -810,14 +930,14 @@ void handleIncomingHardware(const char *body, uint16_t len, uint16_t msg_id) {
     if (strcmp(v, "1") == 0) doTare();
 
   } else if (strcmp(pin, VP_CALIBRATE) == 0) {
-    float kg = atof(v);
-    if (kg > 0) doCalibrateWithKnownWeight(kg);
+    float display_weight = atof(v);
+    if (display_weight > 0) doCalibrateWithKnownWeight(displayWeightToGrams(display_weight));
 
   } else if (strcmp(pin, VP_EMPTY_KEG) == 0) {
     if (strcmp(v, "1") == 0) {
       doSetEmptyKeg(readWeightGrams());
     } else {
-      float explicit_g = atof(v);
+      float explicit_g = displayWeightToGrams(atof(v));
       if (explicit_g >= 0) {
         cfg.empty_keg_g = (uint32_t)explicit_g;
         saveConfig();
@@ -826,7 +946,7 @@ void handleIncomingHardware(const char *body, uint16_t len, uint16_t msg_id) {
     }
 
   } else if (strcmp(pin, VP_MAX_KEG_VOL) == 0) {
-    float l = atof(v);
+    float l = displayVolumeToLiters(atof(v));
     if (l > 0) {
       cfg.max_vol_ml = (uint32_t)(l * 1000.0f);
       saveConfig();
@@ -839,10 +959,28 @@ void handleIncomingHardware(const char *body, uint16_t len, uint16_t msg_id) {
     saveConfig();
     Serial.printf("[Config] Beer name = %s\n", cfg.beer_name);
 
+  } else if (strcmp(pin, VP_TEMP_OFFSET) == 0) {
+    float offset_c = displayTempOffsetToC(atof(v));
+    cfg.temp_offset_c = offset_c;
+    saveConfig();
+    Serial.printf("[Temp] Temperature offset set to %.2f °C\n", cfg.temp_offset_c);
+
   } else if (strcmp(pin, VP_UNIT) == 0) {
-    // "1"=metric "2"=US — we always work in metric internally; just ack
+    uint8_t new_unit = (uint8_t)atoi(v);
+    if (new_unit == 1 || new_unit == 2) {
+      cfg.unit_system = new_unit;
+      saveConfig();
+      Serial.printf("[Config] Unit system = %s\n", cfg.unit_system == 1 ? "metric" : "imperial");
+      publishStaticPins();
+    }
   } else if (strcmp(pin, VP_MEASURE_UNIT) == 0) {
-    // "1"=weight "2"=volume — we report both regardless
+    uint8_t new_measure = (uint8_t)atoi(v);
+    if (new_measure == 1 || new_measure == 2) {
+      cfg.measure_unit = new_measure;
+      saveConfig();
+      Serial.printf("[Config] Measure unit = %s\n", cfg.measure_unit == 1 ? "weight" : "volume");
+      publishStaticPins();
+    }
   }
 }
 
@@ -931,16 +1069,22 @@ void saveParamsCallback() {
   strncpy(cfg.beer_name, p_name->getValue(), sizeof(cfg.beer_name) - 1);
   cfg.beer_name[sizeof(cfg.beer_name) - 1] = '\0';
 
+  float temp_offset = atof(p_temp->getValue());
+  if (!isnan(temp_offset) && !isinf(temp_offset)) {
+    cfg.temp_offset_c = temp_offset;
+  }
+
   saveConfig();
   Serial.println(F("[WiFiManager] Config saved"));
 }
 
 void setupWiFi() {
   // Build WiFiManager parameter objects with current config as defaults
-  char port_str[8], cal_str[20], keg_str[8];
+  char port_str[8], cal_str[20], keg_str[8], temp_str[10];
   snprintf(port_str, sizeof(port_str), "%u", cfg.server_port);
   snprintf(cal_str,  sizeof(cal_str),  "%.4f", cfg.cal_factor);
   snprintf(keg_str,  sizeof(keg_str),  "%.1f", (float)cfg.max_vol_ml / 1000.0f);
+  snprintf(temp_str, sizeof(temp_str), "%.2f", cfg.temp_offset_c);
 
   p_server = new WiFiManagerParameter("server", "Plaato Server Host",    cfg.server_host, 64);
   p_port   = new WiFiManagerParameter("port",   "Server Port",           port_str,         6);
@@ -948,6 +1092,7 @@ void setupWiFi() {
   p_cal    = new WiFiManagerParameter("cal",    "Calibration Factor",    cal_str,         20);
   p_keg    = new WiFiManagerParameter("keg",    "Max Keg Volume (L)",    keg_str,          8);
   p_name   = new WiFiManagerParameter("name",   "Beer Name",             cfg.beer_name,   32);
+  p_temp   = new WiFiManagerParameter("temp",   "Temp Offset (°C)",      temp_str,        10);
 
   WiFiManager wm;
   wm.addParameter(p_server);
@@ -956,6 +1101,7 @@ void setupWiFi() {
   wm.addParameter(p_cal);
   wm.addParameter(p_keg);
   wm.addParameter(p_name);
+  wm.addParameter(p_temp);
   wm.setSaveParamsCallback(saveParamsCallback);
   wm.setConfigPortalTimeout(180);   // 3-minute portal timeout
 
@@ -1112,6 +1258,16 @@ void setup() {
   Serial.printf("[Scale] HX711 ready.  Factor=%.4f  Offset=%ld\n",
                 cfg.cal_factor, (long)cfg.tare_offset);
 
+  bmp180_present = bmp180.begin();
+  if (bmp180_present) {
+    bmp180_temp_c = bmp180.readTemperature();
+    if (isnan(bmp180_temp_c) || isinf(bmp180_temp_c)) bmp180_temp_c = 0.0f;
+    last_bmp180_ms = millis();
+    Serial.printf("[BMP180] Ready. Temp=%.1f C\n", bmp180_temp_c);
+  } else {
+    Serial.println(F("[BMP180] Not detected. Temperature telemetry disabled."));
+  }
+
   if (cfg.cal_factor == 1.0f) {
     Serial.println(F("[Scale] WARNING: Scale not calibrated. "
                      "Use the server UI to calibrate with a known weight."));
@@ -1181,6 +1337,7 @@ void loop() {
 
   // ── Read weight ──
   float weight_g = readWeightGrams();
+  updateTemperatureReading();
   bool  was_pouring = is_pouring;
   updatePourState(weight_g);
 
