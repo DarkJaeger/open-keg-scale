@@ -1,0 +1,5 @@
+*.tmp
+
+# Arduino/ESP8266 local build output
+open_keg_scale/build/**/*.elf
+open_keg_scale/build/**/*.map
